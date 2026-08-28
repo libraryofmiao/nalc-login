@@ -83,10 +83,11 @@
         <canvas id="footerCanvas" width="340" height="30" class="mt-8 mx-auto block"></canvas>
     </main>
 
-    <!-- HIDDEN FORM FOR KOHA AUTOMATIC GET LOGIN (BYPASSES CSRF 403 ERROR) -->
-    <form id="kohaLoginForm" action="http://92.4.70.3:8080/cgi-bin/koha/mainpage.pl" method="GET" style="display: none;">
-        <input type="hidden" name="userid" id="kohaUserid">
-        <input type="hidden" name="password" id="kohaPassword">
+    <!-- HIDDEN FORM FOR AUTOMATIC KOHA SESSION POST LOGIN -->
+    <form id="kohaLoginForm" action="http://92.4.70.3:8080/cgi-bin/koha/mainpage.pl" method="POST" style="display: none;">
+        <input type="hidden" name="login_userid" id="kohaUserid">
+        <input type="hidden" name="login_password" id="kohaPassword">
+        <input type="hidden" name="koha_login_context" value="intranet">
     </form>
 
     <script>
@@ -181,7 +182,6 @@
             btnText.textContent = "Authenticating...";
 
             try {
-                // Submit PIN to serverless Cloudflare Function
                 const response = await fetch("/api/login", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -194,9 +194,11 @@
                     hideError();
                     btnText.textContent = "Logging into Koha...";
 
-                    // Populate hidden GET form and submit directly to Koha Staff CGI
+                    // Map credentials to Koha's exact form input names
                     document.getElementById("kohaUserid").value = data.user;
                     document.getElementById("kohaPassword").value = data.pass;
+                    
+                    // Trigger POST submit directly into Koha
                     document.getElementById("kohaLoginForm").submit();
                 } else {
                     showError(data.error || "Invalid administrative passcode.");
