@@ -13,6 +13,7 @@
         #watermarkCanvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 1; opacity: 0.15; }
         .login-card { background: rgba(15, 23, 42, 0.94); border: 1px solid rgba(71, 85, 105, 0.55); box-shadow: 0 25px 60px rgba(0, 0, 0, 0.55), 0 0 50px rgba(30, 64, 175, 0.08); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); position: relative; z-index: 10; }
         .brand-icon { background: linear-gradient(145deg, rgba(30, 64, 175, 0.45), rgba(15, 23, 42, 0.9)); border: 1px solid rgba(59, 130, 246, 0.35); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05); }
+        .brand-canvas { display: block; width: 100%; max-width: 360px; height: 90px; margin-left: auto; margin-right: auto; }
         @keyframes premiumShine { 0% { background-position: 0% center; } 100% { background-position: 200% center; } }
         .admin-heading { font-family: "Trebuchet MS", "Segoe UI", sans-serif; font-size: clamp(1.9rem, 6vw, 2.4rem); font-weight: 800; letter-spacing: 0.04em; line-height: 1.2; text-align: center; width: 100%; background: linear-gradient(90deg, #93c5fd, #ffffff, #bfdbfe, #ffffff, #93c5fd); background-size: 200% auto; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; text-shadow: 0 0 25px rgba(59, 130, 246, 0.12); animation: premiumShine 5s linear infinite; }
         .admin-heading span { display: block; }
@@ -26,7 +27,7 @@
         .authenticate-btn:active { transform: translateY(0); }
         .error-message { animation: errorAppear 0.2s ease; }
         @keyframes errorAppear { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
-        @media (max-width: 420px) { .digit-box { width: 43px; height: 55px; font-size: 22px; } .admin-heading { font-size: 1.7rem; } }
+        @media (max-width: 420px) { .digit-box { width: 43px; height: 55px; font-size: 22px; } .admin-heading { font-size: 1.7rem; } .brand-canvas { max-width: 100%; } }
         @media (max-width: 350px) { .digit-box { width: 39px; height: 52px; font-size: 20px; } .admin-heading { font-size: 1.5rem; } }
     </style>
 </head>
@@ -36,7 +37,7 @@
         <section class="login-card w-full max-w-md rounded-2xl p-8 sm:p-10">
             <div class="text-center mb-9">
                 <div class="brand-icon mx-auto mb-6 w-16 h-16 rounded-2xl flex items-center justify-center"><i class="fa-solid fa-book-open-reader text-3xl text-blue-400"></i></div>
-                <canvas id="brandCanvas" width="360" height="90" class="mx-auto block"></canvas>
+                <canvas id="brandCanvas" width="360" height="90" class="brand-canvas"></canvas>
             </div>
             <div class="text-center mb-7">
                 <h2 class="admin-heading"><span>Welcome,</span><span>Administrator</span></h2>
@@ -61,7 +62,7 @@
     <script>
         document.addEventListener("contextmenu", (e) => e.preventDefault());
         document.addEventListener("keydown", (e) => { if (e.key === "F12" || (e.ctrlKey && e.shiftKey && ["I", "J", "C"].includes(e.key.toUpperCase())) || (e.ctrlKey && e.key.toUpperCase() === "U")) { e.preventDefault(); e.stopPropagation(); } });
-        function renderBrandCanvas() { const canvas=document.getElementById("brandCanvas"); if(!canvas)return; const ctx=canvas.getContext("2d"); ctx.clearRect(0,0,canvas.width,canvas.height); const gradient=ctx.createLinearGradient(0,0,canvas.width,0); gradient.addColorStop(0,"#93c5fd"); gradient.addColorStop(.5,"#ffffff"); gradient.addColorStop(1,"#93c5fd"); ctx.font="900 42px 'Trebuchet MS', sans-serif"; ctx.fillStyle=gradient; ctx.textAlign="center"; ctx.fillText("NALC",canvas.width/2,45); ctx.font="600 11px 'Trebuchet MS', sans-serif"; ctx.fillStyle="#94a3b8"; ctx.letterSpacing="2px"; ctx.fillText("SUB DIVISIONAL LIBRARY MIAO",canvas.width/2,75); }
+        function renderBrandCanvas() { const canvas=document.getElementById("brandCanvas"); if(!canvas)return; const ctx=canvas.getContext("2d"); ctx.clearRect(0,0,canvas.width,canvas.height); const gradient=ctx.createLinearGradient(0,0,canvas.width,0); gradient.addColorStop(0,"#93c5fd"); gradient.addColorStop(.5,"#ffffff"); gradient.addColorStop(1,"#93c5fd"); ctx.font="900 42px 'Trebuchet MS', sans-serif"; ctx.fillStyle=gradient; ctx.textAlign="center"; ctx.textBaseline="alphabetic"; ctx.fillText("NALC",canvas.width/2,45); ctx.font="600 11px 'Trebuchet MS', sans-serif"; ctx.fillStyle="#94a3b8"; ctx.letterSpacing="2px"; ctx.fillText("SUB DIVISIONAL LIBRARY MIAO",canvas.width/2,75); }
         function renderFooterCanvas() { const canvas=document.getElementById("footerCanvas"); if(!canvas)return; const ctx=canvas.getContext("2d"); ctx.clearRect(0,0,canvas.width,canvas.height); ctx.font="12px sans-serif"; ctx.fillStyle="#64748b"; ctx.textAlign="center"; ctx.fillText("© 2026 New Age Learning Centre. All rights reserved",canvas.width/2,18); }
         function initWatermark() { const canvas=document.getElementById("watermarkCanvas"); if(!canvas)return; const ctx=canvas.getContext("2d"); canvas.width=window.innerWidth; canvas.height=window.innerHeight; ctx.font="12px monospace"; ctx.fillStyle="rgba(148, 163, 184, 0.4)"; ctx.rotate((-20*Math.PI)/180); const text=`NALC SECURE PORTAL | ${new Date().toISOString().slice(0,10)} | ${window.screen.width}x${window.screen.height}`; for(let x=-canvas.width;x<canvas.width*2;x+=300){for(let y=-canvas.height;y<canvas.height*2;y+=100){ctx.fillText(text,x,y);}} }
         const boxes=document.querySelectorAll(".digit-box"), pinForm=document.getElementById("pinForm"), errorMessage=document.getElementById("errorMessage"), btnText=document.getElementById("btnText");
