@@ -1,138 +1,135 @@
-const DEFAULT_KOHA_PATH = "/cgi-bin/koha/mainpage.pl";
-
-function getSetCookies(headers) {
-    if (typeof headers.getSetCookie === "function") return headers.getSetCookie() || [];
-    if (typeof headers.getAll === "function") return headers.getAll("Set-Cookie") || [];
-    const value = headers.get("Set-Cookie");
-    return value ? [value] : [];
-}
-
-function cookieHeader(cookies) {
-    return cookies.map((cookie) => cookie.split(";", 1)[0]).filter(Boolean).join("; ");
-}
-
-function extractHiddenInputs(html) {
-    const values = {};
-    const inputPattern = /<input\b[^>]*>/gi;
-    const namePattern = /\bname\s*=\s*["']([^"']+)["']/i;
-    const valuePattern = /\bvalue\s*=\s*["']([^"']*)["']/i;
-
-    for (const input of html.match(inputPattern) || []) {
-        const name = input.match(namePattern)?.[1];
-        if (!name) continue;
-        values[name] = input.match(valuePattern)?.[1] || "";
-    }
-    return values;
-}
-
-function addTunnelAuth(headers, env) {
-    if (env.KOHA_ACCESS_CLIENT_ID && env.KOHA_ACCESS_CLIENT_SECRET) {
-        headers.set("CF-Access-Client-Id", env.KOHA_ACCESS_CLIENT_ID);
-        headers.set("CF-Access-Client-Secret", env.KOHA_ACCESS_CLIENT_SECRET);
-    }
-}
+const KOHA_LOGIN_PATH = "/cgi-bin/koha/mainpage.pl";
 
 function json(data, status = 200) {
     return new Response(JSON.stringify(data), {
         status,
         headers: {
             "Content-Type": "application/json; charset=UTF-8",
-            "Cache-Control": "no-store",
-            "Referrer-Policy": "no-referrer"
+            "Cache-Control": "no-store"
         }
     });
+}
+
+function getCookies(headers) {
+    if (typeof headers.getSetCookie === "function") return headers.getSetCookie() || [];
+    const value = headers.get("set-cookie");
+    return value ? [value] : [];
+}
+
+function cookieHeader(cookies) {
+    return cookies.map((v) => v.split(";", 1)[0]).filter(Boolean).join("; ");
+}
+
+function hiddenFields(html) {
+    const result = {};
+    for (const tag of html.match(/<input\b[^>]*>/gi) || []) {
+        const name = tag.match(/\bname\s*=\s*["']([^"']+)["']/i)?.[1];
+        if (!name) continue;
+        result[name] = tag.match(/\bvalue\s*=\s*["']([^"']*)["']/i)?.[1] || "";
+    }
+    return result;
 }
 
 export async function onRequestPost(context) {
     try {
         const body = await context.request.json().catch(() => ({}));
         const pin = String(body.pin || "").trim();
-        const { SECRET_PIN, KOHA_USER, KOHA_PASS, KOHA_BASE_URL } = context.env;
+        const env = context.env;
 
-        if (!SECRET_PIN || pin !== SECRET_PIN) {
+        // Safe diagnostics: never return the actual secret values.
+        const configured = {
+            SECRET_PIN: Boolean(env.SECRET_PIN),
+            KOHA_USER: Boolean(env.KOHA_USER),
+            KOHA_PASS: Boolean(env.KOHA_PASS),
+            KOHA_BASE_URL: Boolean(env.KOHA_BASE_URL)
+        };
+
+        if (!configured.SECRET_PIN) {
+            console.error("SECRET_PIN binding is missing");
+            return json({ success: false, error: "Administrative PIN is not configured." }, 500);
+        }
+
+        if (pin !== env.SECRET_PIN) {
             return json({ success: false, error: "Invalid administrative passcode." }, 401);
         }
 
-        if (!KOHA_USER || !KOHA_PASS || !KOHA_BASE_URL) {
-            console.error("Missing KOHA_USER, KOHA_PASS or KOHA_BASE_URL.");
-            return json({ success: false, error: "Koha authentication is not configured." }, 500);
+        if (!configured.KOHA_USER || !configured.KOHA_PASS || !configured.KOHA_BASE_URL) {
+            console.error("Koha bindings missing", configured);
+            return json({
+                success: false,
+                error: "Koha authentication is not configured.",
+                configured
+            }, 500);
         }
 
-        const baseUrl = new URL(KOHA_BASE_URL);
-        baseUrl.pathname = baseUrl.pathname.replace(/\/$/, "");
-        const loginUrl = new URL(DEFAULT_KOHA_PATH, baseUrl);
+        const base = new URL(env.KOHA_BASE_URL);
+        const loginUrl = new URL(KOHA_LOGIN_PATH, base);
 
         const getHeaders = new Headers({
             Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Cache-Control": "no-cache",
-            "User-Agent": "Mozilla/5.0"
+            "User-Agent": "Mozilla/5.0",
+            "Cache-Control": "no-cache"
         });
-        addTunnelAuth(getHeaders, context.env);
 
-        const loginPage = await fetch(loginUrl, {
+        const page = await fetch(loginUrl, {
             method: "GET",
-            redirect: "manual",
-            headers: getHeaders
+            headers: getHeaders,
+            redirect: "manual"
         });
 
-        if (!loginPage.ok) {
-            console.error("Koha login page returned", loginPage.status);
-            return json({ success: false, error: "Unable to reach the Koha login service." }, 502);
+        if (!page.ok) {
+            console.error("Koha GET failed", page.status);
+            return json({ success: false, error: "Unable to reach Koha staff login.", status: page.status }, 502);
         }
 
-        const loginHtml = await loginPage.text();
-        const initialCookies = getSetCookies(loginPage.headers);
-        const hidden = extractHiddenInputs(loginHtml);
-        const form = new URLSearchParams();
+        const html = await page.text();
+        const cookies1 = getCookies(page.headers);
+        const form = new URLSearchParams(hiddenFields(html));
 
-        for (const [name, value] of Object.entries(hidden)) form.set(name, value);
-
-        form.set("login_userid", KOHA_USER);
-        form.set("login_password", KOHA_PASS);
+        form.set("login_userid", env.KOHA_USER);
+        form.set("login_password", env.KOHA_PASS);
         form.set("op", "cud-login");
-        form.set("login_op", "cud-login");
         form.set("koha_login_context", "intranet");
 
         const postHeaders = new Headers({
             "Content-Type": "application/x-www-form-urlencoded",
             Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            Cookie: cookieHeader(initialCookies),
+            Cookie: cookieHeader(cookies1),
             Referer: loginUrl.toString(),
-            Origin: baseUrl.origin,
+            Origin: base.origin,
             "User-Agent": "Mozilla/5.0"
         });
-        addTunnelAuth(postHeaders, context.env);
 
-        const kohaLogin = await fetch(loginUrl, {
+        const result = await fetch(loginUrl, {
             method: "POST",
-            redirect: "manual",
             headers: postHeaders,
-            body: form.toString()
+            body: form.toString(),
+            redirect: "manual"
         });
 
-        const responseCookies = getSetCookies(kohaLogin.headers);
-        const allCookies = [...initialCookies, ...responseCookies];
-        const location = kohaLogin.headers.get("Location") || "";
-        const redirectTarget = new URL(location || "/", loginUrl);
-        const authenticatedRedirect =
-            kohaLogin.status >= 300 &&
-            kohaLogin.status < 400 &&
-            redirectTarget.pathname.startsWith("/cgi-bin/koha/") &&
-            !/mainpage\.pl\?logout/i.test(location);
+        const location = result.headers.get("Location") || "";
+        const cookies2 = getCookies(result.headers);
+        const allCookies = [...cookies1, ...cookies2];
+        const target = location ? new URL(location, loginUrl) : null;
+        const success = Boolean(
+            target &&
+            result.status >= 300 &&
+            result.status < 400 &&
+            target.pathname.startsWith("/cgi-bin/koha/")
+        );
 
-        if (!authenticatedRedirect) {
-            const responseBody = await kohaLogin.text();
-            const loginRejected = /invalid|incorrect|login failed|authentication failed|try again/i.test(responseBody);
-            console.error("Koha authentication failed", {
-                status: kohaLogin.status,
+        if (!success) {
+            const responseText = await result.text();
+            console.error("Koha login rejected", {
+                status: result.status,
                 location,
-                cookies: allCookies.map((c) => c.split("=", 1)[0]).join(",")
+                cookieNames: allCookies.map((c) => c.split("=", 1)[0]).join(","),
+                bodyStart: responseText.slice(0, 200)
             });
             return json({
                 success: false,
-                error: loginRejected
-                    ? "Koha rejected the configured credentials."
-                    : "Koha authentication could not be completed."
+                error: "Koha rejected the staff login.",
+                status: result.status
             }, 502);
         }
 
@@ -141,8 +138,8 @@ export async function onRequestPost(context) {
             redirect: "/koha/cgi-bin/koha/mainpage.pl"
         });
 
-        for (const rawCookie of allCookies) {
-            const cookie = rawCookie
+        for (const raw of allCookies) {
+            const cookie = raw
                 .replace(/;\s*Domain=[^;]+/gi, "")
                 .replace(/;\s*Path=[^;]*/gi, "; Path=/koha")
                 .replace(/;\s*SameSite=[^;]*/gi, "; SameSite=Lax");
@@ -150,8 +147,8 @@ export async function onRequestPost(context) {
         }
 
         return response;
-    } catch (err) {
-        console.error("NALC login error", err);
+    } catch (error) {
+        console.error("NALC login exception", error);
         return json({ success: false, error: "Unable to complete Koha authentication." }, 500);
     }
 }
