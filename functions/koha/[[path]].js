@@ -10,7 +10,7 @@ const REQUEST_HEADERS = [
 
 const RESPONSE_HEADERS = [
     "cache-control", "content-language", "content-type", "etag", "expires",
-    "last-modified", "location", "pragma", "vary", "www-authenticate"
+    "last-modified", "pragma", "vary", "www-authenticate"
 ];
 
 function copyRequestHeaders(request, env, baseUrl) {
@@ -21,7 +21,7 @@ function copyRequestHeaders(request, env, baseUrl) {
     }
 
     headers.set("Host", baseUrl.host);
-    headers.set("X-Forwarded-Proto", "https");
+    headers.set("X-Forwarded-Proto", "http");
     headers.set("X-Forwarded-Host", new URL(request.url).host);
 
     if (env.KOHA_ACCESS_CLIENT_ID && env.KOHA_ACCESS_CLIENT_SECRET) {
@@ -36,7 +36,10 @@ function rewriteLocation(location, publicOrigin, baseUrl) {
     if (!location) return null;
     try {
         const absolute = new URL(location, baseUrl);
-        return `${publicOrigin}/koha${absolute.pathname}${absolute.search}${absolute.hash}`;
+        if (absolute.hostname === baseUrl.hostname && absolute.port === baseUrl.port) {
+            return `${publicOrigin}/koha${absolute.pathname}${absolute.search}${absolute.hash}`;
+        }
+        return location;
     } catch {
         return location.startsWith("/") ? `/koha${location}` : location;
     }
@@ -90,7 +93,7 @@ export async function onRequest(context) {
         const responseHeaders = new Headers();
         for (const name of RESPONSE_HEADERS) {
             const value = upstream.headers.get(name);
-            if (value && name.toLowerCase() !== "location") responseHeaders.set(name, value);
+            if (value) responseHeaders.set(name, value);
         }
 
         const location = rewriteLocation(upstream.headers.get("Location"), incomingUrl.origin, baseUrl);
