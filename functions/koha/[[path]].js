@@ -1,56 +1,49 @@
-const KOHA_BASE_URL = "http://92.4.70.3:8080";
+function getConfig(env) {
+    if (!env.KOHA_BASE_URL) throw new Error("KOHA_BASE_URL is not configured");
+    return new URL(env.KOHA_BASE_URL);
+}
 
 const REQUEST_HEADERS = [
-    "accept",
-    "accept-language",
-    "authorization",
-    "content-type",
-    "cookie",
-    "origin",
-    "referer",
-    "user-agent"
+    "accept", "accept-language", "authorization", "content-type", "cookie",
+    "origin", "referer", "user-agent"
 ];
 
 const RESPONSE_HEADERS = [
-    "cache-control",
-    "content-language",
-    "content-type",
-    "etag",
-    "expires",
-    "last-modified",
-    "location",
-    "pragma",
-    "vary",
-    "www-authenticate"
+    "cache-control", "content-language", "content-type", "etag", "expires",
+    "last-modified", "location", "pragma", "vary", "www-authenticate"
 ];
 
-function copyRequestHeaders(request) {
+function copyRequestHeaders(request, env, baseUrl) {
     const headers = new Headers();
     for (const name of REQUEST_HEADERS) {
         const value = request.headers.get(name);
         if (value) headers.set(name, value);
     }
+
+    headers.set("Host", baseUrl.host);
+    headers.set("X-Forwarded-Proto", "https");
+    headers.set("X-Forwarded-Host", new URL(request.url).host);
+
+    if (env.KOHA_ACCESS_CLIENT_ID && env.KOHA_ACCESS_CLIENT_SECRET) {
+        headers.set("CF-Access-Client-Id", env.KOHA_ACCESS_CLIENT_ID);
+        headers.set("CF-Access-Client-Secret", env.KOHA_ACCESS_CLIENT_SECRET);
+    }
+
     return headers;
 }
 
-function rewriteLocation(location, publicOrigin) {
+function rewriteLocation(location, publicOrigin, baseUrl) {
     if (!location) return null;
     try {
-        const absolute = new URL(location, KOHA_BASE_URL);
+        const absolute = new URL(location, baseUrl);
         return `${publicOrigin}/koha${absolute.pathname}${absolute.search}${absolute.hash}`;
     } catch {
         return location.startsWith("/") ? `/koha${location}` : location;
     }
 }
 
-function rewriteHtml(html) {
-    const prefixes = [
-        "/cgi-bin/koha/",
-        "/intranet-tmpl/",
-        "/opac-tmpl/",
-        "/api/v1/",
-        "/svc/"
-    ];
+function rewriteHtml(html, baseUrl) {
+    const prefixes = ["/cgi-bin/koha/", "/intranet-tmpl/", "/opac-tmpl/", "/api/v1/", "/svc/"];
 
     for (const prefix of prefixes) {
         html = html.split(`\"${prefix}`).join(`\"/koha${prefix}`);
@@ -59,15 +52,14 @@ function rewriteHtml(html) {
         html = html.split(`=${prefix}`).join(`=/koha${prefix}`);
     }
 
-    // Koha may emit absolute links to its own origin.
-    html = html.split(`${KOHA_BASE_URL}/`).join(`/koha/`);
+    html = html.split(`${baseUrl.origin}/`).join(`/koha/`);
     return html;
 }
 
 function copySetCookies(source, target) {
-    const cookies = typeof source.getAll === "function"
-        ? source.getAll("Set-Cookie")
-        : (typeof source.getSetCookie === "function" ? source.getSetCookie() : []);
+    const cookies = typeof source.getSetCookie === "function"
+        ? source.getSetCookie()
+        : (typeof source.getAll === "function" ? source.getAll("Set-Cookie") : []);
 
     for (const cookie of cookies || []) {
         const rewritten = cookie
@@ -80,17 +72,14 @@ function copySetCookies(source, target) {
 
 export async function onRequest(context) {
     try {
+        const baseUrl = getConfig(context.env);
         const incomingUrl = new URL(context.request.url);
         const routePath = context.params.path;
         const path = Array.isArray(routePath) ? routePath.join("/") : (routePath || "");
-        const upstreamUrl = new URL(`/${path}`, KOHA_BASE_URL);
+        const upstreamUrl = new URL(`/${path}`, baseUrl);
         upstreamUrl.search = incomingUrl.search;
 
-        const headers = copyRequestHeaders(context.request);
-        headers.set("Host", new URL(KOHA_BASE_URL).host);
-        headers.set("X-Forwarded-Proto", "https");
-        headers.set("X-Forwarded-Host", incomingUrl.host);
-
+        const headers = copyRequestHeaders(context.request, context.env, baseUrl);
         const upstream = await fetch(upstreamUrl.toString(), {
             method: context.request.method,
             headers,
@@ -104,7 +93,7 @@ export async function onRequest(context) {
             if (value && name.toLowerCase() !== "location") responseHeaders.set(name, value);
         }
 
-        const location = rewriteLocation(upstream.headers.get("Location"), incomingUrl.origin);
+        const location = rewriteLocation(upstream.headers.get("Location"), incomingUrl.origin, baseUrl);
         if (location) responseHeaders.set("Location", location);
         copySetCookies(upstream.headers, responseHeaders);
 
@@ -113,7 +102,7 @@ export async function onRequest(context) {
 
         const contentType = upstream.headers.get("Content-Type") || "";
         if (contentType.includes("text/html")) {
-            const html = rewriteHtml(await upstream.text());
+            const html = rewriteHtml(await upstream.text(), baseUrl);
             return new Response(html, {
                 status: upstream.status,
                 statusText: upstream.statusText,
