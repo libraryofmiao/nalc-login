@@ -26,61 +26,58 @@ function extractHiddenInputs(html) {
 }
 
 function addTunnelAuth(headers, env) {
-    // Optional Cloudflare Access service-token authentication for the private
-    // Koha hostname. The values remain Cloudflare secrets and never reach the browser.
     if (env.KOHA_ACCESS_CLIENT_ID && env.KOHA_ACCESS_CLIENT_SECRET) {
         headers.set("CF-Access-Client-Id", env.KOHA_ACCESS_CLIENT_ID);
         headers.set("CF-Access-Client-Secret", env.KOHA_ACCESS_CLIENT_SECRET);
     }
 }
 
-function rewriteSessionCookie(rawCookie) {
-    return rawCookie
-        .replace(/;\s*Domain=[^;]+/gi, "")
-        .replace(/;\s*Path=[^;]*/gi, "; Path=/koha")
-        .replace(/;\s*SameSite=[^;]*/gi, "; SameSite=Lax");
+function json(data, status = 200) {
+    return new Response(JSON.stringify(data), {
+        status,
+        headers: {
+            "Content-Type": "application/json; charset=UTF-8",
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer"
+        }
+    });
 }
 
 export async function onRequestPost(context) {
     try {
-        const { pin } = await context.request.json();
+        const body = await context.request.json().catch(() => ({}));
+        const pin = String(body.pin || "").trim();
         const { SECRET_PIN, KOHA_USER, KOHA_PASS, KOHA_BASE_URL } = context.env;
 
-        if (!pin || pin !== SECRET_PIN) {
-            return new Response(JSON.stringify({ success: false, error: "Invalid administrative passcode." }), {
-                status: 401,
-                headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
-            });
+        if (!SECRET_PIN || pin !== SECRET_PIN) {
+            return json({ success: false, error: "Invalid administrative passcode." }, 401);
         }
 
         if (!KOHA_USER || !KOHA_PASS || !KOHA_BASE_URL) {
-            console.error("Required Cloudflare variables are missing: KOHA_USER, KOHA_PASS or KOHA_BASE_URL.");
-            return new Response(JSON.stringify({ success: false, error: "Koha authentication is not configured." }), {
-                status: 500,
-                headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
-            });
+            console.error("Missing KOHA_USER, KOHA_PASS or KOHA_BASE_URL.");
+            return json({ success: false, error: "Koha authentication is not configured." }, 500);
         }
 
         const baseUrl = new URL(KOHA_BASE_URL);
+        baseUrl.pathname = baseUrl.pathname.replace(/\/$/, "");
         const loginUrl = new URL(DEFAULT_KOHA_PATH, baseUrl);
-        const upstreamHeaders = new Headers({
-            "Accept": "text/html,application/xhtml+xml",
-            "Cache-Control": "no-cache"
+
+        const getHeaders = new Headers({
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Cache-Control": "no-cache",
+            "User-Agent": "Mozilla/5.0"
         });
-        addTunnelAuth(upstreamHeaders, context.env);
+        addTunnelAuth(getHeaders, context.env);
 
         const loginPage = await fetch(loginUrl, {
             method: "GET",
             redirect: "manual",
-            headers: upstreamHeaders
+            headers: getHeaders
         });
 
         if (!loginPage.ok) {
             console.error("Koha login page returned", loginPage.status);
-            return new Response(JSON.stringify({ success: false, error: "Unable to reach the Koha login service." }), {
-                status: 502,
-                headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
-            });
+            return json({ success: false, error: "Unable to reach the Koha login service." }, 502);
         }
 
         const loginHtml = await loginPage.text();
@@ -89,16 +86,20 @@ export async function onRequestPost(context) {
         const form = new URLSearchParams();
 
         for (const [name, value] of Object.entries(hidden)) form.set(name, value);
+
         form.set("login_userid", KOHA_USER);
         form.set("login_password", KOHA_PASS);
+        form.set("op", "cud-login");
         form.set("login_op", "cud-login");
-        if (!form.has("koha_login_context")) form.set("koha_login_context", "intranet");
+        form.set("koha_login_context", "intranet");
 
         const postHeaders = new Headers({
             "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "text/html,application/xhtml+xml",
-            "Cookie": cookieHeader(initialCookies),
-            "Referer": loginUrl.toString()
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            Cookie: cookieHeader(initialCookies),
+            Referer: loginUrl.toString(),
+            Origin: baseUrl.origin,
+            "User-Agent": "Mozilla/5.0"
         });
         addTunnelAuth(postHeaders, context.env);
 
@@ -112,46 +113,45 @@ export async function onRequestPost(context) {
         const responseCookies = getSetCookies(kohaLogin.headers);
         const allCookies = [...initialCookies, ...responseCookies];
         const location = kohaLogin.headers.get("Location") || "";
-        const looksAuthenticated = kohaLogin.status >= 300 && kohaLogin.status < 400 &&
-            (location.includes("mainpage.pl") || location.includes("/cgi-bin/koha/"));
+        const redirectTarget = new URL(location || "/", loginUrl);
+        const authenticatedRedirect =
+            kohaLogin.status >= 300 &&
+            kohaLogin.status < 400 &&
+            redirectTarget.pathname.startsWith("/cgi-bin/koha/") &&
+            !/mainpage\.pl\?logout/i.test(location);
 
-        if (!looksAuthenticated) {
-            const body = await kohaLogin.text();
-            const failedLogin = /invalid|incorrect|login failed|authentication failed|try again/i.test(body);
-            console.error("Koha authentication failed", kohaLogin.status, location);
-            return new Response(JSON.stringify({
-                success: false,
-                error: failedLogin ? "Koha rejected the configured credentials." : "Koha authentication could not be completed."
-            }), {
-                status: 502,
-                headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
+        if (!authenticatedRedirect) {
+            const responseBody = await kohaLogin.text();
+            const loginRejected = /invalid|incorrect|login failed|authentication failed|try again/i.test(responseBody);
+            console.error("Koha authentication failed", {
+                status: kohaLogin.status,
+                location,
+                cookies: allCookies.map((c) => c.split("=", 1)[0]).join(",")
             });
+            return json({
+                success: false,
+                error: loginRejected
+                    ? "Koha rejected the configured credentials."
+                    : "Koha authentication could not be completed."
+            }, 502);
         }
 
-        const response = new Response(JSON.stringify({
+        const response = json({
             success: true,
             redirect: "/koha/cgi-bin/koha/mainpage.pl"
-        }), {
-            status: 200,
-            headers: {
-                "Content-Type": "application/json",
-                "Cache-Control": "no-store",
-                "Referrer-Policy": "no-referrer"
-            }
         });
 
-        // Only the Koha session is handed to the browser. Koha credentials remain
-        // exclusively inside Cloudflare environment variables.
         for (const rawCookie of allCookies) {
-            response.headers.append("Set-Cookie", rewriteSessionCookie(rawCookie));
+            const cookie = rawCookie
+                .replace(/;\s*Domain=[^;]+/gi, "")
+                .replace(/;\s*Path=[^;]*/gi, "; Path=/koha")
+                .replace(/;\s*SameSite=[^;]*/gi, "; SameSite=Lax");
+            response.headers.append("Set-Cookie", cookie);
         }
 
         return response;
     } catch (err) {
         console.error("NALC login error", err);
-        return new Response(JSON.stringify({ success: false, error: "Unable to complete Koha authentication." }), {
-            status: 500,
-            headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
-        });
+        return json({ success: false, error: "Unable to complete Koha authentication." }, 500);
     }
 }
