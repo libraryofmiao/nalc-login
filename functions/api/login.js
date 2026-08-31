@@ -1,9 +1,8 @@
-const KOHA_BASE_URL = "http://92.4.70.3:8080";
-const KOHA_LOGIN_PATH = "/cgi-bin/koha/mainpage.pl";
+const DEFAULT_KOHA_PATH = "/cgi-bin/koha/mainpage.pl";
 
 function getSetCookies(headers) {
-    if (typeof headers.getAll === "function") return headers.getAll("Set-Cookie") || [];
     if (typeof headers.getSetCookie === "function") return headers.getSetCookie() || [];
+    if (typeof headers.getAll === "function") return headers.getAll("Set-Cookie") || [];
     const value = headers.get("Set-Cookie");
     return value ? [value] : [];
 }
@@ -26,10 +25,26 @@ function extractHiddenInputs(html) {
     return values;
 }
 
+function addTunnelAuth(headers, env) {
+    // Optional Cloudflare Access service-token authentication for the private
+    // Koha hostname. The values remain Cloudflare secrets and never reach the browser.
+    if (env.KOHA_ACCESS_CLIENT_ID && env.KOHA_ACCESS_CLIENT_SECRET) {
+        headers.set("CF-Access-Client-Id", env.KOHA_ACCESS_CLIENT_ID);
+        headers.set("CF-Access-Client-Secret", env.KOHA_ACCESS_CLIENT_SECRET);
+    }
+}
+
+function rewriteSessionCookie(rawCookie) {
+    return rawCookie
+        .replace(/;\s*Domain=[^;]+/gi, "")
+        .replace(/;\s*Path=[^;]*/gi, "; Path=/koha")
+        .replace(/;\s*SameSite=[^;]*/gi, "; SameSite=Lax");
+}
+
 export async function onRequestPost(context) {
     try {
         const { pin } = await context.request.json();
-        const { SECRET_PIN, KOHA_USER, KOHA_PASS } = context.env;
+        const { SECRET_PIN, KOHA_USER, KOHA_PASS, KOHA_BASE_URL } = context.env;
 
         if (!pin || pin !== SECRET_PIN) {
             return new Response(JSON.stringify({ success: false, error: "Invalid administrative passcode." }), {
@@ -38,19 +53,26 @@ export async function onRequestPost(context) {
             });
         }
 
-        if (!KOHA_USER || !KOHA_PASS) {
-            console.error("KOHA_USER or KOHA_PASS is not configured in Cloudflare environment variables.");
+        if (!KOHA_USER || !KOHA_PASS || !KOHA_BASE_URL) {
+            console.error("Required Cloudflare variables are missing: KOHA_USER, KOHA_PASS or KOHA_BASE_URL.");
             return new Response(JSON.stringify({ success: false, error: "Koha authentication is not configured." }), {
                 status: 500,
                 headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
             });
         }
 
-        const loginUrl = new URL(KOHA_LOGIN_PATH, KOHA_BASE_URL);
+        const baseUrl = new URL(KOHA_BASE_URL);
+        const loginUrl = new URL(DEFAULT_KOHA_PATH, baseUrl);
+        const upstreamHeaders = new Headers({
+            "Accept": "text/html,application/xhtml+xml",
+            "Cache-Control": "no-cache"
+        });
+        addTunnelAuth(upstreamHeaders, context.env);
+
         const loginPage = await fetch(loginUrl, {
             method: "GET",
             redirect: "manual",
-            headers: { "Accept": "text/html,application/xhtml+xml", "Cache-Control": "no-cache" }
+            headers: upstreamHeaders
         });
 
         if (!loginPage.ok) {
@@ -72,15 +94,18 @@ export async function onRequestPost(context) {
         form.set("login_op", "cud-login");
         if (!form.has("koha_login_context")) form.set("koha_login_context", "intranet");
 
+        const postHeaders = new Headers({
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "text/html,application/xhtml+xml",
+            "Cookie": cookieHeader(initialCookies),
+            "Referer": loginUrl.toString()
+        });
+        addTunnelAuth(postHeaders, context.env);
+
         const kohaLogin = await fetch(loginUrl, {
             method: "POST",
             redirect: "manual",
-            headers: {
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "text/html,application/xhtml+xml",
-                "Cookie": cookieHeader(initialCookies),
-                "Referer": loginUrl.toString()
-            },
+            headers: postHeaders,
             body: form.toString()
         });
 
@@ -103,8 +128,6 @@ export async function onRequestPost(context) {
             });
         }
 
-        // Credentials never leave Cloudflare. Only the Koha session cookie is
-        // returned to the browser, scoped to the /koha proxy path.
         const response = new Response(JSON.stringify({
             success: true,
             redirect: "/koha/cgi-bin/koha/mainpage.pl"
@@ -117,12 +140,10 @@ export async function onRequestPost(context) {
             }
         });
 
+        // Only the Koha session is handed to the browser. Koha credentials remain
+        // exclusively inside Cloudflare environment variables.
         for (const rawCookie of allCookies) {
-            const rewritten = rawCookie
-                .replace(/;\s*Domain=[^;]+/gi, "")
-                .replace(/;\s*Path=[^;]*/gi, "; Path=/koha")
-                .replace(/;\s*SameSite=[^;]*/gi, "; SameSite=Lax");
-            response.headers.append("Set-Cookie", rewritten);
+            response.headers.append("Set-Cookie", rewriteSessionCookie(rawCookie));
         }
 
         return response;
