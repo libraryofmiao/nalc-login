@@ -21,8 +21,7 @@ function extractHiddenInputs(html) {
     for (const input of html.match(inputPattern) || []) {
         const name = input.match(namePattern)?.[1];
         if (!name) continue;
-        const value = input.match(valuePattern)?.[1] || "";
-        values[name] = value;
+        values[name] = input.match(valuePattern)?.[1] || "";
     }
     return values;
 }
@@ -47,15 +46,11 @@ export async function onRequestPost(context) {
             });
         }
 
-        // First obtain the Koha login page so that any hidden fields/tokens and
-        // the initial session cookie are carried into the authentication POST.
-        const loginPage = await fetch(new URL(KOHA_LOGIN_PATH, KOHA_BASE_URL), {
+        const loginUrl = new URL(KOHA_LOGIN_PATH, KOHA_BASE_URL);
+        const loginPage = await fetch(loginUrl, {
             method: "GET",
             redirect: "manual",
-            headers: {
-                "Accept": "text/html,application/xhtml+xml",
-                "Cache-Control": "no-cache"
-            }
+            headers: { "Accept": "text/html,application/xhtml+xml", "Cache-Control": "no-cache" }
         });
 
         if (!loginPage.ok) {
@@ -71,22 +66,20 @@ export async function onRequestPost(context) {
         const hidden = extractHiddenInputs(loginHtml);
         const form = new URLSearchParams();
 
-        for (const [name, value] of Object.entries(hidden)) {
-            form.set(name, value);
-        }
+        for (const [name, value] of Object.entries(hidden)) form.set(name, value);
         form.set("login_userid", KOHA_USER);
         form.set("login_password", KOHA_PASS);
         form.set("login_op", "cud-login");
         if (!form.has("koha_login_context")) form.set("koha_login_context", "intranet");
 
-        const kohaLogin = await fetch(new URL(KOHA_LOGIN_PATH, KOHA_BASE_URL), {
+        const kohaLogin = await fetch(loginUrl, {
             method: "POST",
             redirect: "manual",
             headers: {
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Accept": "text/html,application/xhtml+xml",
                 "Cookie": cookieHeader(initialCookies),
-                "Referer": new URL(KOHA_LOGIN_PATH, KOHA_BASE_URL).toString()
+                "Referer": loginUrl.toString()
             },
             body: form.toString()
         });
@@ -94,9 +87,6 @@ export async function onRequestPost(context) {
         const responseCookies = getSetCookies(kohaLogin.headers);
         const allCookies = [...initialCookies, ...responseCookies];
         const location = kohaLogin.headers.get("Location") || "";
-
-        // Koha normally returns a redirect after successful authentication.
-        // Do not expose KOHA_USER or KOHA_PASS to the browser.
         const looksAuthenticated = kohaLogin.status >= 300 && kohaLogin.status < 400 &&
             (location.includes("mainpage.pl") || location.includes("/cgi-bin/koha/"));
 
@@ -113,17 +103,20 @@ export async function onRequestPost(context) {
             });
         }
 
-        const response = new Response(null, {
-            status: 302,
+        // Credentials never leave Cloudflare. Only the Koha session cookie is
+        // returned to the browser, scoped to the /koha proxy path.
+        const response = new Response(JSON.stringify({
+            success: true,
+            redirect: "/koha/cgi-bin/koha/mainpage.pl"
+        }), {
+            status: 200,
             headers: {
-                "Location": "/koha/cgi-bin/koha/mainpage.pl",
+                "Content-Type": "application/json",
                 "Cache-Control": "no-store",
                 "Referrer-Policy": "no-referrer"
             }
         });
 
-        // Store Koha's session cookie on the NALC/Cloudflare origin. The browser
-        // will then send it back to the /koha proxy, which forwards it to Koha.
         for (const rawCookie of allCookies) {
             const rewritten = rawCookie
                 .replace(/;\s*Domain=[^;]+/gi, "")
