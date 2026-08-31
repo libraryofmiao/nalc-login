@@ -13,6 +13,7 @@
         #watermarkCanvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 1; opacity: 0.15; }
         .login-card { background: rgba(15, 23, 42, 0.94); border: 1px solid rgba(71, 85, 105, 0.55); box-shadow: 0 25px 60px rgba(0, 0, 0, 0.55), 0 0 50px rgba(30, 64, 175, 0.08); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); position: relative; z-index: 10; }
         .brand-icon { background: linear-gradient(145deg, rgba(30, 64, 175, 0.45), rgba(15, 23, 42, 0.9)); border: 1px solid rgba(59, 130, 246, 0.35); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05); }
+        .branding { width: 100%; display: flex; flex-direction: column; align-items: center; text-align: center; }
         .brand-canvas { display: block; width: 100%; max-width: 360px; height: 90px; margin-left: auto; margin-right: auto; }
         @keyframes premiumShine { 0% { background-position: 0% center; } 100% { background-position: 200% center; } }
         .admin-heading { font-family: "Trebuchet MS", "Segoe UI", sans-serif; font-size: clamp(1.9rem, 6vw, 2.4rem); font-weight: 800; letter-spacing: 0.04em; line-height: 1.2; text-align: center; width: 100%; background: linear-gradient(90deg, #93c5fd, #ffffff, #bfdbfe, #ffffff, #93c5fd); background-size: 200% auto; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; text-shadow: 0 0 25px rgba(59, 130, 246, 0.12); animation: premiumShine 5s linear infinite; }
@@ -27,6 +28,7 @@
         .authenticate-btn:active { transform: translateY(0); }
         .error-message { animation: errorAppear 0.2s ease; }
         @keyframes errorAppear { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+        @media (max-width: 600px) { .branding { width: 100%; align-items: center; } .branding .brand-canvas { width: 100%; max-width: 360px; margin-left: auto; margin-right: auto; } }
         @media (max-width: 420px) { .digit-box { width: 43px; height: 55px; font-size: 22px; } .admin-heading { font-size: 1.7rem; } .brand-canvas { max-width: 100%; } }
         @media (max-width: 350px) { .digit-box { width: 39px; height: 52px; font-size: 20px; } .admin-heading { font-size: 1.5rem; } }
     </style>
@@ -35,7 +37,7 @@
     <canvas id="watermarkCanvas"></canvas>
     <main class="min-h-screen flex flex-col items-center justify-center px-5 py-8">
         <section class="login-card w-full max-w-md rounded-2xl p-8 sm:p-10">
-            <div class="text-center mb-9">
+            <div class="branding text-center mb-9">
                 <div class="brand-icon mx-auto mb-6 w-16 h-16 rounded-2xl flex items-center justify-center"><i class="fa-solid fa-book-open-reader text-3xl text-blue-400"></i></div>
                 <canvas id="brandCanvas" width="360" height="90" class="brand-canvas"></canvas>
             </div>
